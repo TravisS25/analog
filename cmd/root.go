@@ -15,7 +15,6 @@
 package cmd
 
 import (
-	"bufio"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -27,6 +26,11 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
+
+type config struct {
+	TN        string
+	HousePair string
+}
 
 var cfgFile string
 
@@ -91,27 +95,9 @@ to quickly create a Cobra application.`,
 		defer assessmentFile.Close()
 
 		assessmentReader := csv.NewReader(assessmentFile)
-		// numOfAssessmentFields := assessmentReader.FieldsPerRecord
-
-		// if numOfAssessmentFields < afDNCol {
-		// 	return errors.New("--af-dn-col is greater than total columns")
-		// }
-		// if numOfAssessmentFields < afHPCol {
-		// 	return errors.New("--af-hp-col is greater than total columns")
-		// }
-
 		dumpReader := csv.NewReader(dumpFile)
-		// numOfDumpFields := dumpReader.FieldsPerRecord
 
-		// if numOfDumpFields < dfDNCol {
-		// 	return errors.New("--df-dn-col is greater than total columns")
-		// }
-
-		// if numOfDumpFields < dfHPCol {
-		// 	return errors.New("--df-hp-col is greater than total columns")
-		// }
-
-		dumpMap := make(map[string]string)
+		dumpMap := make(map[string][]string)
 		isFirstRow := true
 		dumpHPHeaderNum := -1
 		dumpDNHeaderNum := -1
@@ -150,7 +136,25 @@ to quickly create a Cobra application.`,
 				housePair := columns[dumpHPHeaderNum]
 				dn := columns[dumpDNHeaderNum]
 
-				dumpMap[dn] = housePair
+				dumpMap[dn] = append(dumpMap[dn], housePair)
+			}
+		}
+
+		// for k, v := range dumpMap {
+		// 	fmt.Printf("key: %s; value: %v\n", k, v)
+		// }
+
+		if _, err := os.Stat(outputFile); err == nil {
+			home, _ := homedir.Dir()
+
+			if outputFile == home {
+				return errors.New("don't delete home dir")
+			}
+
+			err = os.Remove(outputFile)
+
+			if err != nil {
+				return err
 			}
 		}
 
@@ -162,13 +166,12 @@ to quickly create a Cobra application.`,
 
 		defer outFile.Close()
 
-		outFileReader := bufio.NewReader(outFile)
+		outFileWriter := csv.NewWriter(outFile)
 
 		isFirstRow = true
 
 		assessmentHPHeaderNum := -1
 		assessmentDNHeaderNum := -1
-		assessmentMap := make(map[string]string)
 
 		// Read assessment file and find compare dns to find house pairs
 		for {
@@ -176,6 +179,7 @@ to quickly create a Cobra application.`,
 
 			if err != nil {
 				if err == io.EOF {
+					outFileWriter.Flush()
 					break
 				}
 
@@ -203,14 +207,39 @@ to quickly create a Cobra application.`,
 			} else {
 				// If assessment sheet has something in house pair, don't overwrite
 				if columns[assessmentHPHeaderNum] == "" {
-					for dn, hp := range dumpMap {
-						if len(dn) > columns[assessmentDNHeaderNum] {
-							if strings.Contains(dn, assessmentDNHeaderNum) {
-
+					for dn, hps := range dumpMap {
+						// If direct number from dump is greater than one from assessment,
+						// then find substring of direct number from dump
+						// Else find substring from assessment
+						if len(dn) > len(columns[assessmentDNHeaderNum]) {
+							if strings.Contains(dn, columns[assessmentDNHeaderNum]) && columns[assessmentDNHeaderNum] != "" {
+								for i, v := range hps {
+									if i == len(hps)-1 {
+										columns[assessmentHPHeaderNum] += v
+									} else {
+										columns[assessmentHPHeaderNum] += v + " / "
+									}
+								}
+							}
+						} else {
+							if strings.Contains(columns[assessmentDNHeaderNum], dn) && dn != "" {
+								for i, v := range hps {
+									if i == len(hps)-1 {
+										columns[assessmentHPHeaderNum] += v
+									} else {
+										columns[assessmentHPHeaderNum] += v + " / "
+									}
+								}
 							}
 						}
 					}
 				}
+			}
+
+			err = outFileWriter.Write(columns)
+
+			if err != nil {
+				return err
 			}
 		}
 
@@ -249,12 +278,11 @@ func init() {
 	rootCmd.Flags().StringP("assessment-file", "a", "", "Assessment file where analog assement has been done for facility")
 	rootCmd.MarkFlagRequired("assessment-file")
 
-	rootCmd.Flags().StringP("af-dn-header", "", "", "Assessment file direct number column number.  Ex: If direct number is in column 'F' then column number would be 6")
+	rootCmd.Flags().String("af-dn-header", "", "Assessment file direct number column number.  Ex: If direct number is in column 'F' then column number would be 6")
 	rootCmd.MarkFlagRequired("af-dn-header")
 
-	rootCmd.Flags().StringP(
+	rootCmd.Flags().String(
 		"af-hp-header",
-		"",
 		"",
 		`
 		Assessment file house pair column number.  
